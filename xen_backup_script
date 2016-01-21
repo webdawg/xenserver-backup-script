@@ -1,0 +1,68 @@
+#!/bin/bash
+#
+# Written By: Rahul Kumar
+# Created date: Jun 14, 2014
+# Version: 1.1
+# Visit: http://tecadmin.net
+#
+#modified by webdawg@gmail.com
+#hsl ftw
+#
+#
+
+# http://stackoverflow.com/questions/821396/aborting-a-shell-script-if-any-command-returns-a-non-zero-value
+set -e
+
+
+DATE=`date +%Y-%m-%d-%H-%M-%S`
+XSNAME=`echo $HOSTNAME`
+mkdir -p /mnt/DATMOUNT
+UUIDFILE=/tmp/uuids.txt
+
+### Mounting remote share backup drive
+
+if [ ! -d /mnt/DATMOUNT ]; then
+	echo "No mount point found, kindly check"
+	exit 0
+fi
+
+mount -t cifs //HOST.NAME/backups/SHARESTUFF /mnt/DATMOUNT -o user=COOLUSER,password=234U90FJSIA5WSDSF,uid=0,gid=0,cache=none,sec=ntlm
+
+BACKUPPATH=/mnt/DATMOUNT/$XSNAME/$DATE
+mkdir -p $BACKUPPATH
+
+if [ ! -d $BACKUPPATH ]; then
+	echo "Could not create backup directory"
+	exit 0
+fi
+
+# Fetching list UUIDs of all VMs running on XenServer
+xe vm-list is-control-domain=false is-a-snapshot=false | grep uuid | cut -d":" -f2 > $UUIDFILE
+
+if [ ! -f $UUIDFILE ]; then
+	echo "Cannot create UUID list file"
+	exit 0
+fi
+
+while read VMUUID; do
+	VMNAME=`xe vm-list uuid=$VMUUID | grep name-label | cut -d":" -f2 | sed 's/^ *//g'`
+	if [ $VMNAME != "ONE-YOU-DO-NOT-WANT-TO-BACKUP" ]; then
+		echo "Snapshotting:"
+		echo $VMUUID
+		SNAPUUID=`xe vm-snapshot uuid=$VMUUID new-name-label="SNAPSHOT-$VMUUID-$DATE"`
+		xe template-param-set is-a-template=false ha-always-run=false uuid=$SNAPUUID
+		echo "Copying:"
+        	echo $VMUUID	
+		xe vm-export vm=$SNAPUUID filename="$BACKUPPATH/$VMNAME-$DATE.xva"
+		xe vm-uninstall uuid=$SNAPUUID force=true
+	fi
+done < $UUIDFILE
+
+if [ -d /mnt/DATMOUNT/${XSNAME} ]; then
+        ls -dt /mnt/DATMOUNT/${XSNAME}/* | tail -n +4 | xargs rm -rf
+fi
+
+umount /mnt/DATMOUNT
+
+rm -f $UUIDFILE
+
